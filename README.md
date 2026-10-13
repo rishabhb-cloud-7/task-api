@@ -44,7 +44,13 @@ content-type: application/json
 
 ## Swagger UI
 
-![Swagger UI](docs-screenshot.png)
+![Swagger UI](screenshots/docs-screenshot.png)
+delete task:
+![Swagger UI successfull run](screenshots/delete-task-{task_id}screenshot.png)
+terminal:
+![Swagger UI terminal](screenshots/terminal_screenshot.png)
+
+
 
 ## The mortality experiment
 
