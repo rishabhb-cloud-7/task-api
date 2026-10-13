@@ -45,13 +45,24 @@ content-type: application/json
 ## Swagger UI
 
 ![Swagger UI](screenshots/docs-screenshot.png)
-delete task:
-![Swagger UI successfull run](screenshots/delete-task-{task_id}screenshot.png)
-terminal:
+
+### terminal:
 ![Swagger UI terminal](screenshots/terminal_screenshot.png)
 
+### deleting a task:
+![Swagger UI successfull run](screenshots/delete-task-{task_id}screenshot.png)
+
+#### 1. Posting a task:
+![Swagger UI posting task ](screenshots/posttask.png)
+
+#### 2. Application shutdown:
+![Swagger UI closing it](screenshots/shutdown.png)
+
+#### 3. task missing after shutdhown:
+![Swagger UI closing it](screenshots/extrataskmissingaftershutdhown.png)
 
 
-## The mortality experiment
+
+#### The mortality experiment
 
 I created a task, stopped the server, started it again and called `GET /tasks`. The new task was gone and only the 3 starter tasks remained, because the data is stored in a Python list in memory, which is erased when the program stops. A database would fix this by saving the data outside the program.
