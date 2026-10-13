@@ -1,3 +1,6 @@
+import sqlite3
+from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Response
@@ -6,14 +9,66 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-app = FastAPI(title="Task API", version="1.0", description="A small in-memory CRUD API for a to-do list.")
+# The database is one file, stored next to main.py. SQLite creates it automatically.
+DB_FILE = Path(__file__).parent / "tasks.db"
 
-# ---------- Stage 2: in-memory "database" ----------
 SEED_TASKS = [
     {"id": 1, "title": "Learn HTTP", "done": True},
     {"id": 2, "title": "Build a CRUD API", "done": False},
     {"id": 3, "title": "Publish to GitHub", "done": False},
 ]
+
+
+# ---------- Stage 0: SQLite setup ----------
+@contextmanager
+def db():
+    """Open a connection, commit on success, roll back on error, always close."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row  # lets us read columns by name: row["title"]
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def seed_tasks(conn):
+    conn.executemany(
+        "INSERT INTO tasks (title, done) VALUES (?, ?)",
+        [(t["title"], int(t["done"])) for t in SEED_TASKS],
+    )
+
+
+def init_db():
+    with db() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS tasks (
+                   id    INTEGER PRIMARY KEY,
+                   title TEXT NOT NULL,
+                   done  INTEGER NOT NULL DEFAULT 0
+               )"""
+        )
+        count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        if count == 0:  # seed only on the very first run
+            seed_tasks(conn)  # runs in one transaction: all 3 rows or none
+
+
+def row_to_task(row):
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
+
+
+@asynccontextmanager
+async def lifespan(app):
+    init_db()  # runs once every time the server starts
+    yield
+
+
+app = FastAPI(title="Task API", version="1.0", description="A CRUD API for a to-do list, stored in SQLite.", lifespan=lifespan)
+
+# ---------- Old in-memory list (replaced step by step in Stages 1-3) ----------
 tasks = [dict(t) for t in SEED_TASKS]
 
 
@@ -43,7 +98,6 @@ async def http_error(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request, exc):
-    # FastAPI defaults to 422; the assignment wants 400 Bad Request.
     first = exc.errors()[0]
     field = ".".join(str(p) for p in first["loc"] if p != "body") or "body"
     return JSONResponse(status_code=400, content={"error": f"Invalid {field}: {first['msg']}"})
@@ -57,7 +111,6 @@ def not_found(task_id: int):
     return JSONResponse(status_code=404, content={"error": f"Task {task_id} not found"})
 
 
-# ---------- Stage 1: root and health ----------
 @app.get("/", summary="API description")
 def root():
     return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
@@ -68,7 +121,7 @@ def health():
     return {"status": "ok"}
 
 
-# ---------- Stage 2: read ----------
+# ---------- Read (in memory) ----------
 @app.get("/tasks", summary="List all tasks (optional ?done= and ?search= filters)")
 def list_tasks(done: Optional[bool] = None, search: Optional[str] = None):
     result = tasks
@@ -85,7 +138,7 @@ def get_task(task_id: int):
     return task if task else not_found(task_id)
 
 
-# ---------- Stage 3: create ----------
+# ---------- Create (in memory) ----------
 @app.post("/tasks", status_code=201, summary="Create a task")
 def create_task(body: TaskCreate):
     title = body.title.strip()
@@ -96,7 +149,7 @@ def create_task(body: TaskCreate):
     return task
 
 
-# ---------- Stage 4: update and delete ----------
+# ---------- Update and delete (in memory) ----------
 @app.put("/tasks/{task_id}", summary="Update a task's title and/or done")
 def update_task(task_id: int, body: TaskUpdate):
     task = find_task(task_id)
@@ -122,14 +175,14 @@ def delete_task(task_id: int):
     return Response(status_code=204)
 
 
-# ---------- Extras (optional) ----------
+# ---------- Extras (in memory) ----------
 @app.get("/stats", summary="Task counts")
 def stats():
     done = sum(1 for t in tasks if t["done"])
     return {"total": len(tasks), "done": done, "open": len(tasks) - done}
 
 
-@app.post("/reset", summary="Restore the 3 seed tasks")
+@app.post("/reset", summary="Restore the 3 starter tasks")
 def reset():
     tasks[:] = [dict(t) for t in SEED_TASKS]
     return {"status": "reset", "total": len(tasks)}
