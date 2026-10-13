@@ -108,7 +108,7 @@ def bad_request(message: str):
 
 
 def not_found(task_id: int):
-    return JSONResponse(status_code=404, content={"error": f"Task {task_id} not found"})
+    return JSONResponse(status_code=404, content={"error": "Task not found"})
 
 
 @app.get("/", summary="API description")
@@ -121,21 +121,28 @@ def health():
     return {"status": "ok"}
 
 
-# ---------- Read (in memory) ----------
+# ---------- Stage 1: read from SQLite ----------
 @app.get("/tasks", summary="List all tasks (optional ?done= and ?search= filters)")
 def list_tasks(done: Optional[bool] = None, search: Optional[str] = None):
-    result = tasks
+    sql = "SELECT * FROM tasks WHERE 1 = 1"
+    params = []
     if done is not None:
-        result = [t for t in result if t["done"] == done]
+        sql += " AND done = ?"
+        params.append(int(done))
     if search:
-        result = [t for t in result if search.lower() in t["title"].lower()]
-    return result
+        sql += " AND title LIKE ?"
+        params.append(f"%{search}%")
+    sql += " ORDER BY id"
+    with db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [row_to_task(r) for r in rows]
 
 
 @app.get("/tasks/{task_id}", summary="Get one task by id")
 def get_task(task_id: int):
-    task = find_task(task_id)
-    return task if task else not_found(task_id)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return row_to_task(row) if row else not_found(task_id)
 
 
 # ---------- Create (in memory) ----------
