@@ -68,17 +68,6 @@ async def lifespan(app):
 
 app = FastAPI(title="Task API", version="1.0", description="A CRUD API for a to-do list, stored in SQLite.", lifespan=lifespan)
 
-# ---------- Old in-memory list (replaced step by step in Stages 1-3) ----------
-tasks = [dict(t) for t in SEED_TASKS]
-
-
-def find_task(task_id: int):
-    return next((t for t in tasks if t["id"] == task_id), None)
-
-
-def next_id() -> int:
-    return max((t["id"] for t in tasks), default=0) + 1
-
 
 # ---------- Request bodies ----------
 class TaskCreate(BaseModel):
@@ -157,40 +146,51 @@ def create_task(body: TaskCreate):
     return {"id": new_id, "title": title, "done": False}
 
 
-# ---------- Update and delete (in memory) ----------
+# ---------- Stage 3: update and delete with SQL ----------
 @app.put("/tasks/{task_id}", summary="Update a task's title and/or done")
 def update_task(task_id: int, body: TaskUpdate):
-    task = find_task(task_id)
-    if not task:
-        return not_found(task_id)
-    if body.title is None and body.done is None:
-        return bad_request("Provide at least one of: title, done")
-    if body.title is not None:
-        if not body.title.strip():
-            return bad_request("title must not be empty")
-        task["title"] = body.title.strip()
-    if body.done is not None:
-        task["done"] = body.done
-    return task
+    with db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            return not_found(task_id)
+        if body.title is None and body.done is None:
+            return bad_request("Provide at least one of: title, done")
+        new_title = row["title"]
+        if body.title is not None:
+            if not body.title.strip():
+                return bad_request("title must not be empty")
+            new_title = body.title.strip()
+        new_done = row["done"] if body.done is None else int(body.done)
+        conn.execute(
+            "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
+            (new_title, new_done, task_id),
+        )
+    return {"id": task_id, "title": new_title, "done": bool(new_done)}
 
 
 @app.delete("/tasks/{task_id}", status_code=204, summary="Delete a task")
 def delete_task(task_id: int):
-    task = find_task(task_id)
-    if not task:
+    with db() as conn:
+        cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        deleted = cur.rowcount  # how many rows were removed (0 = unknown id)
+    if deleted == 0:
         return not_found(task_id)
-    tasks.remove(task)
     return Response(status_code=204)
 
 
-# ---------- Extras (in memory) ----------
+# ---------- Extras: stats and reset, now done by SQL ----------
 @app.get("/stats", summary="Task counts")
 def stats():
-    done = sum(1 for t in tasks if t["done"])
-    return {"total": len(tasks), "done": done, "open": len(tasks) - done}
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, COALESCE(SUM(done), 0) AS done FROM tasks"
+        ).fetchone()
+    return {"total": row["total"], "done": row["done"], "open": row["total"] - row["done"]}
 
 
-@app.post("/reset", summary="Restore the 3 starter tasks")
+@app.post("/reset", summary="Delete everything and restore the 3 starter tasks")
 def reset():
-    tasks[:] = [dict(t) for t in SEED_TASKS]
-    return {"status": "reset", "total": len(tasks)}
+    with db() as conn:
+        conn.execute("DELETE FROM tasks")
+        seed_tasks(conn)
+    return {"status": "reset", "total": len(SEED_TASKS)}
