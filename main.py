@@ -145,15 +145,16 @@ def get_task(task_id: int):
     return row_to_task(row) if row else not_found(task_id)
 
 
-# ---------- Create (in memory) ----------
+# ---------- Stage 2: insert into SQLite ----------
 @app.post("/tasks", status_code=201, summary="Create a task")
 def create_task(body: TaskCreate):
     title = body.title.strip()
     if not title:
         return bad_request("title must not be empty")
-    task = {"id": next_id(), "title": title, "done": False}
-    tasks.append(task)
-    return task
+    with db() as conn:
+        cur = conn.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", (title, 0))
+        new_id = cur.lastrowid  # the id the database handed out
+    return {"id": new_id, "title": title, "done": False}
 
 
 # ---------- Update and delete (in memory) ----------
